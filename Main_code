@@ -1,0 +1,166 @@
+"""
+==============================================================
+ISC–Rating Correlation Analysis and Visualization 
+==============================================================
+
+This script performs two major analyses:
+1. Behavioral correlations between emotional regulation ratings and ISC.
+2. Visualization of ISC or any source-level data on an MNE brain surface.
+
+Required files:
+---------------
+1. ratingandISCmeg.csv   → Behavioral and ISC measures for correlation.
+2. neu_watch_stc5-rh.stc + neu_watch_stc5-lh.stc → Right/Left hemisphere source estimate (MNE format).
+3. heads.csv             → Source-level values to map on the brain surface.
+4. MNE fsaverage subject (or your subject) in MNE_DATA folder.
+
+Output:
+-------
+- Spearman correlation results printed in the console.
+- Brain visualizations saved as PNG files in the chosen output folder.
+"""
+
+# ==============================================================
+# 1. Import required libraries
+# ==============================================================
+
+import os
+import pandas as pd
+import numpy as np
+import mne
+from scipy.stats import spearmanr
+import matplotlib.pyplot as plt
+
+# ==============================================================
+# 2. Behavioral and ISC correlation analysis
+# ==============================================================
+
+# Path to CSV file with behavioral data
+ratings_path = r"C:\Users\Danila\Downloads\ratingandISCmeg.csv"
+
+# Load CSV
+df = pd.read_csv(ratings_path)
+print("\n=== Loaded rating and ISC data ===")
+print(df.head())
+
+# Compute difference scores (Emotion Regulation contrasts)
+df['ER_reappraisal_rating'] = df['reappraisal'] - df['free watching negative']
+df['ER_suppression_rating'] = df['suppression'] - df['free watching negative']
+df['ER_reappraisal_ISC'] = df['Isc reappraisal'] - df['Isc free watching negative']
+df['ER_suppression_ISC'] = df['Isc suppression'] - df['Isc free watching negative']
+
+# Spearman correlation: Reappraisal
+rho_reapp, p_reapp = spearmanr(df['ER_reappraisal_rating'], df['ER_reappraisal_ISC'])
+# Spearman correlation: Suppression
+rho_supp, p_supp = spearmanr(df['ER_suppression_rating'], df['ER_suppression_ISC'])
+
+print("\n=== Correlation results ===")
+print(f"Reappraisal: rho = {rho_reapp:.3f}, p = {p_reapp:.3f}")
+print(f"Suppression: rho = {rho_supp:.3f}, p = {p_supp:.3f}")
+
+# ==============================================================
+# 3. SourceEstimate loading and preparation
+# ==============================================================
+
+stc_path = r"C:\Users\Danila\Downloads\neu_watch_stc5-rh.stc"
+stc = mne.read_source_estimate(stc_path)
+
+print("\n=== Loaded SourceEstimate ===")
+print(stc)
+print(f"Vertices: {stc.vertices}")
+print(f"Data range: {stc.data.min():.4f} – {stc.data.max():.4f}")
+
+# Average over time to obtain mean activation per source
+stc_mean_data = stc.data.mean(axis=1)
+stc_mean = mne.SourceEstimate(
+    data=stc_mean_data[:, np.newaxis],
+    vertices=stc.vertices,
+    tmin=0,
+    tstep=1.0,
+    subject=stc.subject
+)
+
+# ==============================================================
+# 4. Setup MNE subjects directory
+# ==============================================================
+
+subjects_dir = r"C:\Users\Danila\mne_data"
+os.makedirs(subjects_dir, exist_ok=True)
+mne.set_config('SUBJECTS_DIR', subjects_dir, set_env=True)
+print("\nMNE SUBJECTS_DIR set to:", subjects_dir)
+
+# ==============================================================
+# 5. Load custom source-level values (e.g., correlations per vertex)
+# ==============================================================
+
+csv_path = r"C:\Users\Danila\Downloads\heads.csv"
+df_heads = pd.read_csv(csv_path)
+
+# Allow user to choose column by index (default: 3rd column, Python index = 3)
+column_index = 3
+values = df_heads.iloc[:, column_index].values
+
+print("\n=== Loaded source values ===")
+print(f"Selected column: {df_heads.columns[column_index]}")
+print(f"Length: {len(values)} | Expected: {stc_mean.data.shape[0]}")
+
+if len(values) != stc_mean.data.shape[0]:
+    raise ValueError("❌ Mismatch: number of source points differs from STC vertices.")
+else:
+    print("✅ Lengths match — ready for visualization.")
+
+# Replace data in stc_mean with custom values
+stc_mean.data = values[:, np.newaxis]
+
+# ==============================================================
+# 6. Brain visualization (MNE 3D plot)
+# ==============================================================
+
+# Define color scale symmetric around 0 (blue–white–red)
+clim = dict(kind='value', lims=[-0.1, 0, 0.1])
+
+# Create brain visualization
+brain = stc_mean.plot(
+    hemi='split',              # both hemispheres (split view)
+    subjects_dir=subjects_dir,
+    initial_time=0,
+    time_viewer=False,
+    clim=clim,
+    colormap='bwr',            # blue–white–red
+    background='white',
+    foreground='black',
+    colorbar=True,
+    title='Mean ISC / Source Values'
+)
+
+# ==============================================================
+# 7. Save brain images
+# ==============================================================
+
+output_dir = r"C:\Users\Danila\Downloads"
+os.makedirs(output_dir, exist_ok=True)
+
+brain.show_view(view='lateral', hemi='lh')
+brain.save_image(os.path.join(output_dir, "brain_lh_lateral.png"))
+
+brain.show_view(view='lateral', hemi='rh')
+brain.save_image(os.path.join(output_dir, "brain_rh_lateral.png"))
+
+# Combine both hemispheres into one figure for publication
+fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+for ax, hemi, title in zip(
+    axes,
+    ["lh_lateral", "rh_lateral"],
+    ["Left Hemisphere", "Right Hemisphere"]
+):
+    img = plt.imread(os.path.join(output_dir, f"brain_{hemi}.png"))
+    ax.imshow(img)
+    ax.axis('off')
+    ax.set_title(title, fontsize=18, fontweight='bold')
+
+plt.tight_layout()
+output_image = os.path.join(output_dir, "brain_LR_combined.png")
+plt.savefig(output_image, dpi=400, bbox_inches='tight')
+plt.show()
+
+print("\n✅ Visualization complete! Saved images in:", output_dir)  
